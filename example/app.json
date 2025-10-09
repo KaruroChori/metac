@@ -1,0 +1,10 @@
+{
+    "src": ["file-a.c", "t/file-b.c"],
+    "cflags": ["-I../include"],
+    "ldflags": [],
+    "toolchain": "",
+    "cc": "gcc",
+    "deps": ["c", "X11","png"],
+    "dev-deps": ["z"],
+    "outdir": "build"
+}
