@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,7 +11,6 @@
 static char* s_current_filename = NULL;
 static int s_current_line_num = 0;
 
-static char* run_command_and_capture_output(const char* command, int* status);
 static void unquote_if_needed(char* str);
 static void trim_whitespace(char *str);
 
@@ -197,6 +195,8 @@ static void ensure_eval_helpers(FILE* out_fp, int* generated_flag) {
         "extern StringView _metac_serialize_float(float v);\n"
         "extern StringView _metac_serialize_double(double v);\n"
         "extern StringView _metac_serialize_const_char_ptr(const char* v);\n" 
+        "extern StringView _metac_exec_eval(const char* filename, int line_num, const char* cmd);\n"
+        "extern StringView _metac_exec_emit(const char* filename, int line_num, const char* cmd);\n"
         "extern StringView _metac_strcpy(const void* src, size_t count);\n\n";
         fprintf(out_fp, "%s", helpers); *generated_flag = 1;
     }
@@ -232,57 +232,70 @@ static void handle_eval(FILE *out_fp, const char* filename, int line_num, const 
     char hash_input[4096]; 
     snprintf(hash_input, sizeof(hash_input), "%s:%d:$eval:%s", filename, line_num, expr); 
     unsigned long hash = hash_string(hash_input); 
-    fprintf(out_fp, "\n// Generated from: %s:%d for $eval\nStringView generate_eval_%lu() {\n    #line %d \"%s\"\n    %s tmp = (%s);\n    return _metac_serialize_%s(tmp);\n}\n", filename, line_num, hash, line_num, filename, type, expr, sanitized_type);
+    fprintf(out_fp, 
+        "\n"
+        "// Generated from: %s:%d for $eval\n"
+        "StringView generate_eval_%lu() {\n"
+        "#line %d \"%s\"\n"
+        "    %s tmp = (%s);\n"
+        "    return _metac_serialize_%s(tmp);\n"
+        "}\n", 
+        filename, line_num, hash, line_num, filename, type, expr, sanitized_type);
     free(sanitized_type);
 }
+
 static void handle_emit(FILE *out_fp, const char* filename, int line_num, const char* stmt) {
     char* escaped_stmt = escape_string_for_c(stmt);
     char hash_input[4096];
     snprintf(hash_input, sizeof(hash_input), "%s:%d:$emit:%s", filename, line_num, stmt);
     unsigned long hash = hash_string(hash_input);
-    fprintf(out_fp, "\n// Generated from: %s:%d for $emit\nStringView generate_emit_%lu() {\n    #line %d \"%s\"\n    static const char content[] = \"%s\";\n    return (StringView){.ptr = content, .len = sizeof(content) - 1};\n}\n", filename, line_num, hash, line_num, filename, escaped_stmt);
+    fprintf(out_fp, 
+        "\n"
+        "// Generated from: %s:%d for $emit\n"
+        "StringView generate_emit_%lu() {\n"
+        "    #line %d \"%s\"\n"
+        "    static const char content[] = \"%s\";\n"
+        "    return (StringView){.ptr = content, .len = sizeof(content) - 1};\n"
+        "}\n", 
+        filename, line_num, hash, line_num, filename, escaped_stmt);
     free(escaped_stmt);
 }
-static void handle_exec_eval(FILE* out_fp, const char* filename, int line_num, const char* type, const char* cmd, int* helper_flag) { char* unquoted_cmd = strdup(cmd); 
-    unquote_if_needed(unquoted_cmd); int status; char* expr_from_cmd = run_command_and_capture_output(unquoted_cmd, &status);
-    if (status != 0) {
-        fprintf(stderr, "Error: $exec_eval at %s:%d failed: %s\n", filename, line_num, expr_from_cmd);
-        free(expr_from_cmd);
-        free(unquoted_cmd);
-        return;
-    } 
-    trim_whitespace(expr_from_cmd);
-    char* escaped_expr = escape_string_for_c(expr_from_cmd);
-    char hash_input[4096];
+
+static void handle_exec_eval(FILE* out_fp, const char* filename, int line_num, const char* type, const char* cmd, int* helper_flag) { 
+    ensure_eval_helpers(out_fp, helper_flag);
+    char* escaped_filename = escape_string_for_c(filename);
+    char* sanitized_type = sanitize_type_for_identifier(type);
+    if (!sanitized_type) return;
+    char hash_input[4096]; 
     snprintf(hash_input, sizeof(hash_input), "%s:%d:$exec_eval:%s", filename, line_num, cmd); 
-    unsigned long hash = hash_string(hash_input);
-    fprintf(out_fp, "\n// Generated from: %s:%d for $exec_eval\nStringView generate_exec_eval_%lu() {\n    const char* content = \"%s\";\n    size_t len = %zu;\n  return _metac_strcpy(content, len);\n}\n", filename, line_num, hash, escaped_expr, strlen(expr_from_cmd)); 
-    free(expr_from_cmd);
-    free(escaped_expr);
-    free(unquoted_cmd);
-
+    unsigned long hash = hash_string(hash_input); 
+    fprintf(out_fp, 
+        "\n"
+        "// Generated from: %s:%d for $exec_eval\n"
+        "StringView generate_exec_eval_%lu() {\n"
+        "#line %d \"%s\"\n"
+        "    return _metac_exec_eval(\"%s\",%d,%s);\n"  //TODO check value compatibility with the return type?
+        "}\n", 
+        filename, line_num, hash, line_num, filename,  escaped_filename, line_num, cmd);
+    free(sanitized_type);
+    free(escaped_filename);
 }
-static void handle_exec_emit(FILE* out_fp, const char* filename, int line_num, const char* cmd) {
-    char* unquoted_cmd = strdup(cmd);
-    unquote_if_needed(unquoted_cmd);
-    int status;
-    char* stmt_from_cmd = run_command_and_capture_output(unquoted_cmd, &status);
-    if (status != 0) {
-        fprintf(stderr, "Error: $exec_emit at %s:%d failed: %s\n", filename, line_num, stmt_from_cmd);
-        free(stmt_from_cmd);
-        free(unquoted_cmd);
-        return;
-    }
 
-    char* escaped_stmt = escape_string_for_c(stmt_from_cmd);
+static void handle_exec_emit(FILE* out_fp, const char* filename, int line_num, const char* cmd) {
+    char* escaped_filename = escape_string_for_c(filename);
     char hash_input[4096];
     snprintf(hash_input, sizeof(hash_input), "%s:%d:$exec_emit:%s", filename, line_num, cmd);
     unsigned long hash = hash_string(hash_input);
-    fprintf(out_fp, "\n// Generated from: %s:%d for $exec_emit\nStringView generate_exec_emit_%lu() {\n    static const char content[] = \"%s\";\n    return (StringView){.ptr = content, .len = sizeof(content) - 1};\n}\n", filename, line_num, hash, escaped_stmt);
-    free(stmt_from_cmd);
-    free(escaped_stmt);
-    free(unquoted_cmd);
-    }
+    fprintf(out_fp, 
+        "\n"
+        "// Generated from: %s:%d for $exec_emit\n"
+        "StringView generate_exec_emit_%lu() {\n"
+        "#line %d \"%s\"\n"
+        "    return _metac_exec_emit(\"%s\",%d,%s);\n"
+        "}\n", 
+        filename, line_num, hash, line_num, filename,  escaped_filename, line_num, cmd);
+    free(escaped_filename);
+}
 
 // --- Processing Drivers with #line support ---
 void process_file_for_generation(const char *in_filename, const char *content, FILE *out_fp) {
@@ -344,7 +357,10 @@ void process_file_for_generation(const char *in_filename, const char *content, F
 
 void process_file_for_patching(const char *in_filename, const char *content, const char *lib_name, FILE *out_fp) {
     void* lib_handle = dlopen(lib_name, RTLD_LAZY);
-    if (!lib_handle) { fprintf(stderr, "Error: Could not open library '%s': %s\n", lib_name, dlerror()); return; }
+    if (!lib_handle) { 
+        fprintf(stderr, "Error: Could not open library '%s': %s\n", lib_name, dlerror()); 
+        return;
+    }
 
     s_current_filename = strdup(in_filename);
     s_current_line_num = 1;
@@ -441,5 +457,10 @@ int main(int argc, char *argv[]) {
 }
 
 // --- Supporting Helpers ---
-static char* run_command_and_capture_output(const char* command, int* status) { char full_command[4096]; snprintf(full_command, sizeof(full_command), "%s 2>&1", command); FILE* pipe = popen(full_command, "r"); if (!pipe) { perror("popen failed"); *status = -1; return strdup(""); } size_t capacity = 4096, size = 0; char* output = malloc(capacity); if (!output) { perror("malloc"); *status = -1; pclose(pipe); return strdup(""); } output[0] = '\0'; while (!feof(pipe)) { size_t read_bytes = fread(output + size, 1, capacity - size - 1, pipe); if (read_bytes > 0) size += read_bytes; if (size >= capacity - 1) { capacity *= 2; char* new_output = realloc(output, capacity); if (!new_output) { free(output); perror("realloc failed"); *status = -1; pclose(pipe); return strdup(""); } output = new_output; } } output[size] = '\0'; int pclose_status = pclose(pipe); *status = WIFEXITED(pclose_status) ? WEXITSTATUS(pclose_status) : -1; return output; }
-static void unquote_if_needed(char* str) { if (!str) return; size_t len = strlen(str); if (len >= 2 && str[0] == '"' && str[len - 1] == '"') { memmove(str, str + 1, len - 2); str[len - 2] = '\0'; } }
+static void unquote_if_needed(char* str) {
+    if (!str) return;
+    size_t len = strlen(str);
+    if (len >= 2 && str[0] == '"' && str[len - 1] == '"'){
+        memmove(str, str + 1, len - 2); str[len - 2] = '\0';
+    }
+}
