@@ -1,0 +1,2 @@
+- Not all `\"%s\"` patterns have `%s` correctly escaped as C string. Filenames are excluded.
+- Add list of extra dep files to ensure dependencies are followed?

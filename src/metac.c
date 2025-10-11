@@ -133,7 +133,7 @@ static void generate_makefile_from_config(const char* config_filename, FILE* out
     fprintf(out_fp, "\t@echo \"[LD] $@\"\n");
     fprintf(out_fp, "\t$(CC) -o $@ $^ $(LDFLAGS) $(DEPS_LDFLAGS)\n\n");
     fprintf(out_fp, "# 2. Final Compile\n");
-    fprintf(out_fp, "$(OUTDIR)/%%.final.o: $(OUTDIR)/%%.final.c -D\\$$COMPTIME_ERASE\n");
+    fprintf(out_fp, "$(OUTDIR)/%%.final.o: $(OUTDIR)/%%.final.c\n");
     fprintf(out_fp, "\t@echo \"[CC] $<\"\n");
     fprintf(out_fp, "\t$(CC) $(CFLAGS) -c -o $@ $<\n\n");
     fprintf(out_fp, "# 3. Metac Apply: Creates a .final.c file from a preprocessed source and the meta-library.\n");
@@ -157,6 +157,7 @@ static void generate_makefile_from_config(const char* config_filename, FILE* out
     fprintf(out_fp, "clean:\n");
     fprintf(out_fp, "\t@echo \"[CLEAN]\"\n");
     fprintf(out_fp, "\trm -rf $(OUTDIR) $(TARGET)\n");
+    fprintf(out_fp, "#.PRECIOUS: $(PREPROC_FILES) $(GEN_FILES) $(FINAL_C_FILES) $(OBJ_FILES) $(METAC_LIB)\n");
 
     free(target_name_full); free(p_srcdir); free(p_srcs); free(p_cc);
     free(p_cflags); free(p_ldflags); free(p_deps); free(p_dev_deps);
@@ -339,6 +340,8 @@ void process_file_for_generation(const char *in_filename, const char *content, F
             
             char *args[2] = {NULL, NULL};
             const char *end = extract_arguments(cursor + strlen(pattern_str), num_args, args);
+            int extra_nwln = 0;
+            for (const char* check_nwln = cursor; check_nwln<end; check_nwln++)if(*check_nwln=='\n')extra_nwln++;   //Track extra newlines inside the custom macros
             if (end) {
                 if (strcmp(pattern_str, "$eval") == 0) handle_eval(out_fp, s_current_filename, s_current_line_num, args[0], args[1], &eval_helpers_generated);
                 else if (strcmp(pattern_str, "$emit") == 0) handle_emit(out_fp, s_current_filename, s_current_line_num, args[0]);
@@ -347,6 +350,7 @@ void process_file_for_generation(const char *in_filename, const char *content, F
                 cursor = end;
             } else { cursor++; }
             for (int i = 0; i < num_args; ++i) free(args[i]);
+            s_current_line_num+=extra_nwln;
         }
     }
 
@@ -398,6 +402,8 @@ void process_file_for_patching(const char *in_filename, const char *content, con
 
             char *args[2] = {NULL, NULL};
             const char *end = extract_arguments(cursor + strlen(pattern_str), num_args, args);
+            int extra_nwln = 0;
+            for (const char* check_nwln = cursor; check_nwln<end; check_nwln++)if(*check_nwln=='\n')extra_nwln++;   //Track extra newlines inside the custom macros
             if (end) {
                 char hash_input[4096];
                 snprintf(hash_input, sizeof(hash_input), "%s:%d:%s:%s", s_current_filename, s_current_line_num, pattern_str, num_args == 1 ? args[0] : args[1]);
@@ -419,6 +425,7 @@ void process_file_for_patching(const char *in_filename, const char *content, con
                 cursor = end;
             } else { fputc(*cursor, out_fp); cursor++; }
             for (int i = 0; i < num_args; ++i) free(args[i]);
+            s_current_line_num+=extra_nwln;
         }
     }
     dlclose(lib_handle);

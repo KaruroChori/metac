@@ -46,7 +46,7 @@ void run_all_tests() {
     $emit(for (int i=0; i<2; ++i) { puts("Hello from $emit!"); });
 
     int int_eval = $exec_eval(int, "./get_version.sh");
-    $exec_emit("./get_banner.sh 112");
+    $exec_emit("./get_banner.sh");
 
 
     $emit(struct help{};for (int i=0; i<2; ++i) { puts("Hello from $emit!"); });
