@@ -185,6 +185,7 @@ static void write_gen_header(FILE* out_fp, const char* content) {
     //fprintf(out_fp, "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n");
     fprintf(out_fp, "#define $COMPTIME\n\n");
     fprintf(out_fp, "#include <metac/comptime.h>\n");
+    //fprintf(out_fp, "#define $comptime_only(x) x\n");
     fprintf(out_fp, "%s", content); // Embed the preprocessed source
 }
 static void ensure_eval_helpers(FILE* out_fp, int* generated_flag) { 
@@ -322,7 +323,7 @@ void process_file_for_generation(const char *in_filename, const char *content, F
         if (p_emit && (!next_match || p_emit < next_match)) next_match = p_emit;
         if (p_exec_eval && (!next_match || p_exec_eval < next_match)) next_match = p_exec_eval;
         if (p_exec_emit && (!next_match || p_exec_emit < next_match)) next_match = p_exec_emit;
-        
+
         if (!next_match) break;
 
         for (const char* l = cursor; l < next_match; ++l) if (*l == '\n') s_current_line_num++;
@@ -336,8 +337,8 @@ void process_file_for_generation(const char *in_filename, const char *content, F
             if (cursor == p_eval) { pattern_str = "$eval"; num_args = 2; }
             else if (cursor == p_emit) { pattern_str = "$emit"; num_args = 1; }
             else if (cursor == p_exec_eval) { pattern_str = "$exec_eval"; num_args = 2; }
-            else { pattern_str = "$exec_emit"; num_args = 1; }
-            
+            else if (cursor == p_exec_emit) { pattern_str = "$exec_emit"; num_args = 1; }
+
             char *args[2] = {NULL, NULL};
             const char *end = extract_arguments(cursor + strlen(pattern_str), num_args, args);
             int extra_nwln = 0;
@@ -360,6 +361,8 @@ void process_file_for_generation(const char *in_filename, const char *content, F
 }
 
 void process_file_for_patching(const char *in_filename, const char *content, const char *lib_name, FILE *out_fp) {
+    fprintf(out_fp, "#include <metac/comptime.h>\n");
+
     void* lib_handle = dlopen(lib_name, RTLD_LAZY);
     if (!lib_handle) { 
         fprintf(stderr, "Error: Could not open library '%s': %s\n", lib_name, dlerror()); 
@@ -376,6 +379,8 @@ void process_file_for_patching(const char *in_filename, const char *content, con
         const char *p_emit = strstr(cursor, "$emit(");
         const char *p_exec_eval = strstr(cursor, "$exec_eval(");
         const char *p_exec_emit = strstr(cursor, "$exec_emit(");
+        const char *p_comptime_only = strstr(cursor, "$comptime_only(");
+        const char *p_if_comptime = strstr(cursor, "$if_comptime(");
 
         const char *next_match = NULL;
         if (p_line) next_match = p_line;
@@ -383,6 +388,8 @@ void process_file_for_patching(const char *in_filename, const char *content, con
         if (p_emit && (!next_match || p_emit < next_match)) next_match = p_emit;
         if (p_exec_eval && (!next_match || p_exec_eval < next_match)) next_match = p_exec_eval;
         if (p_exec_emit && (!next_match || p_exec_emit < next_match)) next_match = p_exec_emit;
+        if (p_comptime_only && (!next_match || p_comptime_only < next_match)) next_match = p_comptime_only;
+        if (p_if_comptime && (!next_match || p_if_comptime < next_match)) next_match = p_if_comptime;
 
         if (!next_match) { fprintf(out_fp, "%s", cursor); break; }
 
@@ -398,30 +405,43 @@ void process_file_for_patching(const char *in_filename, const char *content, con
             if (cursor == p_eval) { pattern_str = "$eval"; macro_prefix="eval"; num_args = 2; needs_free = 1; }
             else if (cursor == p_emit) { pattern_str = "$emit"; macro_prefix="emit"; num_args = 1; needs_free = 0; }
             else if (cursor == p_exec_eval) { pattern_str = "$exec_eval"; macro_prefix="exec_eval"; num_args = 2; needs_free = 1; }
-            else { pattern_str = "$exec_emit"; macro_prefix="exec_emit"; num_args = 1; needs_free = 0; }
+            else if (cursor == p_exec_emit) { pattern_str = "$exec_emit"; macro_prefix="exec_emit"; num_args = 1; needs_free = 0; }
+            else if (cursor == p_comptime_only) { pattern_str = "$comptime_only"; macro_prefix="comptime_only"; num_args = 1; needs_free = 0; }
+            else { pattern_str = "$if_comptime"; macro_prefix="if_comptime"; num_args = 1; needs_free = 0; }
 
             char *args[2] = {NULL, NULL};
             const char *end = extract_arguments(cursor + strlen(pattern_str), num_args, args);
             int extra_nwln = 0;
             for (const char* check_nwln = cursor; check_nwln<end; check_nwln++)if(*check_nwln=='\n')extra_nwln++;   //Track extra newlines inside the custom macros
             if (end) {
-                char hash_input[4096];
-                snprintf(hash_input, sizeof(hash_input), "%s:%d:%s:%s", s_current_filename, s_current_line_num, pattern_str, num_args == 1 ? args[0] : args[1]);
-                unsigned long hash = hash_string(hash_input);
-                char func_name[256];
-                snprintf(func_name, sizeof(func_name), "generate_%s_%lu", macro_prefix, hash);
-                dlerror();
-                void* func_ptr = dlsym(lib_handle, func_name);
-                const char* dlsym_error = dlerror();
-                if (dlsym_error) {
-                    fprintf(stderr, "Warning: Could not find symbol '%s' in lib '%s': %s\n", func_name, lib_name, dlsym_error);
-                    fwrite(cursor, 1, end - cursor, out_fp);
-                } else {
-                    GeneratorFunc gen_func = (GeneratorFunc)func_ptr;
-                    StringView result = gen_func();
-                    fwrite(result.ptr, 1, result.len, out_fp);
-                    if (needs_free && result.ptr) free((void*)result.ptr);
+                if (strcmp(pattern_str, "$comptime_only") == 0){
+                    fputs("$comptime_error(\"Cannot run at runtime.\");",out_fp);
                 }
+                else if (strcmp(pattern_str, "$if_comptime") == 0){
+                }
+                //else if (strcmp(pattern_str, "$include_comptime") == 0){
+                //}
+                else{
+                    char hash_input[4096];
+                    snprintf(hash_input, sizeof(hash_input), "%s:%d:%s:%s", s_current_filename, s_current_line_num, pattern_str, num_args == 1 ? args[0] : args[1]);
+                    unsigned long hash = hash_string(hash_input);
+                    char func_name[256];
+                    snprintf(func_name, sizeof(func_name), "generate_%s_%lu", macro_prefix, hash);
+                    dlerror();
+                    void* func_ptr = dlsym(lib_handle, func_name);
+                    const char* dlsym_error = dlerror();
+                    if (dlsym_error) {
+                        fprintf(stderr, "Warning: Could not find symbol '%s' in lib '%s': %s\n", func_name, lib_name, dlsym_error);
+                        fwrite(cursor, 1, end - cursor, out_fp);
+                    } else {
+                        GeneratorFunc gen_func = (GeneratorFunc)func_ptr;
+                        StringView result = gen_func();
+                        fwrite(result.ptr, 1, result.len, out_fp);
+                        if (needs_free && result.ptr) free((void*)result.ptr);
+                    }
+                }
+
+
                 cursor = end;
             } else { fputc(*cursor, out_fp); cursor++; }
             for (int i = 0; i < num_args; ++i) free(args[i]);

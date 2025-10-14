@@ -2,7 +2,7 @@
 #include "../../include/metac/comptime.h"
 
 extern int test1();
-int test2(){}
+int test2(){return 22;}
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,11 +30,27 @@ const char* get_username() {
 }
 
 
+$if_comptime(
+#include <md4.h>
+)
+
+//#define $include_comptime $include_comptime
+
+//$include_comptime("md4.h")
+
+
+static inline int answer_to_life(int a, int b){
+    $comptime_only(
+        return 42;
+    );
+}
+
+
 // --- Main test function ---
 
 void run_all_tests() {
 
-    int int_view = $eval(int, (50 * 2) - 1);
+    int int_view = $eval(int, answer_to_life(1,5));
 
     User user_view = $eval(User, ((User){ .id = 101,
          .name = get_username() }));
@@ -54,6 +70,7 @@ void run_all_tests() {
     /*$exec_emit("./get_banner.sh");*/
 
     /* $exec_emit("uname -a"); */
+    answer_to_life(4,6);
 }
 
 int main() {
