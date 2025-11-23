@@ -2,9 +2,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -g -std=c23
 
-# TinyCC library flag
-TCC_LIBS = -Ltcc
-
 # All targets
 all: libmetac.so metac example
 
